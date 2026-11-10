@@ -1,13 +1,17 @@
 import numpy as np
 import sys
 import os
+import contextlib
+import io
 import pandas as pd
-import toml
+import tomllib  # stdlib since Python 3.11 (replaces the 'toml' package)
 import shutil
 import matplotlib.pyplot as plt
-from vehicle_models_gggv_sim_py import VehicleModelValidation
-from tum_sim_types_py import ExternalInfluences, DriverInput
- 
+# Pure-python port of the OpenCarDynamics validation vehicle model.
+# Replaces the previous colcon/ROS2 built C++ bindings so the toolchain runs
+# everywhere (incl. macOS arm64) with plain pip dependencies only.
+from src.vehicle_model_py import VehicleModelValidation, ExternalInfluences, DriverInput
+
 
 """
 Created by: Frederik Werner
@@ -51,8 +55,8 @@ def param_load(gggv_config_file, sim_config_file, veh_config_file, folder, path_
 
     # read gggv config file
     try:
-        with open(os.path.join(path_params, gggv_config_file), 'r') as fh:
-            params['gggv_config'] = toml.load(fh)
+        with open(os.path.join(path_params, gggv_config_file), 'rb') as fh:
+            params['gggv_config'] = tomllib.load(fh)
             shutil.copy(os.path.join(path_params, gggv_config_file), path_params_copy)
     except FileNotFoundError:
         raise FileNotFoundError('album config file does not exist or invalid target specifier "'
@@ -61,8 +65,8 @@ def param_load(gggv_config_file, sim_config_file, veh_config_file, folder, path_
 
     # read sim config file
     try:
-        with open(os.path.join(path_params, sim_config_file), 'r') as fh:
-            params['sim_config'] = toml.load(fh)
+        with open(os.path.join(path_params, sim_config_file), 'rb') as fh:
+            params['sim_config'] = tomllib.load(fh)
             shutil.copy(os.path.join(path_params, sim_config_file), path_params_copy)
             # calc additional params
             params['sim_config']['n_sim'] = round(params['sim_config']['sim_stop_time'] / params['sim_config']['t_s'])
@@ -79,8 +83,8 @@ def param_load(gggv_config_file, sim_config_file, veh_config_file, folder, path_
 
     # read vehicle config file
     try:
-        with open(os.path.join(path_params, veh_config_file), 'r') as fh:
-            params['veh_config'] = toml.load(fh)
+        with open(os.path.join(path_params, veh_config_file), 'rb') as fh:
+            params['veh_config'] = tomllib.load(fh)
             shutil.copy(os.path.join(path_params, veh_config_file), path_params_copy)
     except FileNotFoundError:
         raise FileNotFoundError('vehicle config file does not exist or invalid target specifier "'
@@ -125,9 +129,6 @@ class sim_handler:
             None
         """
 
-        # Disable Prints
-        sys.stdout = open(os.devnull, 'w')
-
         self.v_set=v_set
         self.ax_set=ax_set
         self.gt_set=gt_set
@@ -146,22 +147,19 @@ class sim_handler:
         self.pm.set_parameter_value("initial_state.drivetrain.omega_RL_radps", np.float64(omega_rear))
         self.pm.set_parameter_value("initial_state.drivetrain.omega_RR_radps", np.float64(omega_rear))
 
-        #set additional vehicle parameter
-        if len(self.veh_config["VEH"]) != 0:
-            #enable prints
-            sys.stdout = sys.__stdout__
-            for key, value in self.veh_config["VEH"].items():
-                if key.startswith("variable"):
-                    name = value
-                elif key.startswith("value"):
-                    param = value
-                    self.pm.set_parameter_value(name, param)
-                else:
-                    sys.exit('Check veh_config_file section [VEH]. There might be issue with parameter order or naming.')
-        else:
-            print('baseline vehicle parameter loaded')
-            #enable prints
-            sys.stdout = sys.__stdout__
+        # set additional vehicle parameter (silenced like the original C++ bindings were)
+        with contextlib.redirect_stdout(io.StringIO()):
+            if len(self.veh_config["VEH"]) != 0:
+                for key, value in self.veh_config["VEH"].items():
+                    if key.startswith("variable"):
+                        name = value
+                    elif key.startswith("value"):
+                        param = value
+                        self.pm.set_parameter_value(name, param)
+                    else:
+                        sys.exit('Check veh_config_file section [VEH]. There might be issue with parameter order or naming.')
+            else:
+                print('baseline vehicle parameter loaded')
 
         self.veh.reset()
 
@@ -182,9 +180,6 @@ class sim_handler:
             r_rear (float): Rear wheel rolling radius.
         """
 
-        # Disable Prints
-        sys.stdout = open(os.devnull, 'w')
-
         #load param handler
         self.pm = self.veh.get_param_manager()
 
@@ -195,8 +190,6 @@ class sim_handler:
         self.tw_r = self.pm.get_parameter_value("vehicle_dynamics_double_track.b_r").as_double()
         self.r_front = self.pm.get_parameter_value("vehicle_dynamics_double_track.rr_w_f").as_double()
         self.r_rear = self.pm.get_parameter_value("vehicle_dynamics_double_track.rr_w_r").as_double()
-        #enable prints
-        sys.stdout = sys.__stdout__
     
     def init_result_arrays(self):
         """
@@ -280,6 +273,9 @@ class sim_handler:
         self.ay_gradient = 0.0
         self.ol_unstable = False
         self.ax_unfeasible = False
+        # fallback steering ramp rise rate; overwritten by the step-response
+        # calibration once it completes (same as in the original toolchain)
+        self.sim_config.setdefault('delta_rise_rate', 0.05)
 
     def set_ext_f(self, i):
         """
@@ -334,11 +330,15 @@ class sim_handler:
             if self.start_step_response_test_i == 0:
                 self.start_step_response_test_i = i
             # wait and analyze step response
-            elif i == self.start_step_response_test_i + self.sim_config['wait_step_time'] / self.sim_config['t_s']:
-                if self.ay_vf_mps2[i] == 0:
-                    test=1
-                self.ay_gradient = self.ay_vf_mps2[i] / self.sim_config['delta_step_test']
-                self.sim_config['delta_rise_rate'] = self.sim_config['delta_step_test'] / self.ay_vf_mps2[i] * self.sim_config['ay_target_rate']
+            elif i == int(self.start_step_response_test_i + self.sim_config['wait_step_time'] / self.sim_config['t_s']):
+                # guard against a zero step response (division by zero)
+                if abs(self.ay_vf_mps2[i]) < 1e-9:
+                    self.ax_unfeasible = True
+                    self.ol_unstable = True
+                    self.step_response_ok = True
+                else:
+                    self.ay_gradient = self.ay_vf_mps2[i] / self.sim_config['delta_step_test']
+                    self.sim_config['delta_rise_rate'] = self.sim_config['delta_step_test'] / self.ay_vf_mps2[i] * self.sim_config['ay_target_rate']
             # reset delta to 0
             elif i > self.start_step_response_test_i + self.sim_config['wait_step_time'] / self.sim_config['t_s']:
                 self.delta[i] = 0.0
@@ -384,15 +384,9 @@ class sim_handler:
         """
         #get output from model
         self.out = self.veh.get_output()
-        if i>0 and self.sim_config['debug_log']:
-            self.debug = self.veh.get_debug_out()
-            if not hasattr(self, 'debug_size'):
-                self.debug_size = len(self.debug.get_values())
-                self.debug_arr = np.zeros((self.sim_config['n_sim']-1, self.debug_size))
-                self.debug_header = self.debug.get_signal_names()
-                self.debug_arr[i-1,:] = self.debug.get_values()
-            else:
-                self.debug_arr[i-1,:] = self.debug.get_values()
+        # NOTE: the pure-python validation model does not expose a C++ debug
+        # container; debug logging (sim_debug.csv) is therefore skipped.
+        self.sim_config['debug_log'] = False
         self.vx_mps[i] = self.out.velocity_mps.x
         self.vy_mps[i] = self.out.velocity_mps.y
         self.ay_mps2[i] = self.out.acceleration_mps2.y

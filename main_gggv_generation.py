@@ -14,6 +14,16 @@ Created on: 28.02.2024
 # USER INPUT ----------------------------------------------------------------------------------------------------------
 # # -------------------------------------------------------------------------------------------------------------------
 
+import argparse
+
+_parser = argparse.ArgumentParser(description="Generate a g-g-g-v diagram via batched steering-ramp simulations.")
+_parser.add_argument('--single', action='store_true',
+                     help="Run a single steering-ramp simulation (debug mode) instead of the full batch.")
+_parser.add_argument('--gt', type=float, default=9.0, help="Vertical acceleration set point [m/s^2] (single run only)")
+_parser.add_argument('--v', type=float, default=40.0, help="Velocity set point [m/s] (single run only)")
+_parser.add_argument('--ax', type=float, default=0.0, help="Longitudinal acceleration set point [m/s^2] (single run only)")
+_args, _ = _parser.parse_known_args()
+
 # assign valid param files
 gggv_config_file = 'gggv_default'
 sim_config_file = 'sim_default'
@@ -23,10 +33,20 @@ veh_config_file = 'veh_default'
 multi_threaded_execution=True
 
 # input for single run only
-singlerun=False
-gt =9.0
-v = 40.0
-ax = 0.0
+singlerun=_args.single
+gt =_args.gt
+v = _args.v
+ax = _args.ax
+
+# On macOS the default start method since Python 3.8 is 'spawn', which requires
+# the whole script to be importable by child processes and adds large overhead.
+# 'fork' (the Linux default) keeps the original behavior and works fine here.
+if __name__ == "__main__":
+    import multiprocessing
+    try:
+        multiprocessing.set_start_method('fork')
+    except RuntimeError:
+        pass
 
 # # -------------------------------------------------------------------------------------------------------------------
 # # Initialization ---------------------------------------------------------------------------------------------------
@@ -68,7 +88,7 @@ print("Let's go!")
 
 # simulate model with constant steering angle and force request
 def simulate(gt_set, v_set, ax_set, sim_idx):
-    # local sim_handler
+    # local sim_handler (params is inherited by forked worker processes)
     sim = src.sim_handling.sim_handler(params)
     sim.set_parameter(v_set, ax_set, gt_set)
     sim.init_result_arrays()
@@ -165,7 +185,10 @@ if not singlerun:
             # simulate using all available processor cores via process pool executor
             data_handler.results_array = [None]*data_handler.nLines
             i=0
-            with concurrent.futures.ProcessPoolExecutor() as executor:
+            # cap the number of workers: pure-python sims are memory-light but
+            # unbounded pools can oversubscribe the machine on small notebooks
+            max_workers = min(os.cpu_count() or 1, 8)
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                 for results_executor in executor.map(simulate, data_handler.gt_arr, data_handler.v_arr, data_handler.ax_arr, data_handler.sim_idx_arr):
                     data_handler.results_array[i] = results_executor
                     i=i+1
@@ -184,6 +207,7 @@ if not singlerun:
             print(f'Time remaining: {time_left} min. Clearing cache...')                
             data_handler.postprocessing(gt)
 else:
+    data_handler.config_single(gt, v, ax)
     data_handler.results_array = simulate(gt, v, ax, 0)
 
 # Print running time
