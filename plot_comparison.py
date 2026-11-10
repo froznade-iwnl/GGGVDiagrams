@@ -82,7 +82,7 @@ def cload():
         SystemExit: If the directory selection fails after a maximum number of attempts.
     """
 
-    rel_path = os.path.join("gggv_sim", "output")
+    rel_path = os.path.join("output")
 
     # Absolute path to the desired folder
     abs_path = os.path.join(os.getcwd(), rel_path)
@@ -229,7 +229,7 @@ def plot():
     axgt1 = plt.axes([0.25, 0.15, 0.65, 0.03])
     
     # Create a slider 
-    gt_select1 = Slider(axgt1, 'gt', np.min(data["g_list"]), np.max(data["g_list"]), np.min(data["g_list"]), valstep=(data["g_list"][1]-data["g_list"][0]))
+    gt_select1 = Slider(axgt1, 'gt', np.min(data["g_list"]), np.max(data["g_list"]), valinit=np.min(data["g_list"]), valstep=(data["g_list"][1]-data["g_list"][0]))
 
     # Iterate over Data Dictionaries
     for i, data in enumerate(data_dict):
@@ -239,8 +239,8 @@ def plot():
 
         # The parametrized function to be plotted
         for v in data["v_picks"]:
-            x = data["gg_array"][0, v, mask_ax_unfeasible[0,v,:], 0]
-            y = data["gg_array"][0, v, mask_ax_unfeasible[0,v,:], 1]
+            x = data["gg_array"][0, v, :, 0][mask_ax_unfeasible[0,v,:]]
+            y = data["gg_array"][0, v, :, 1][mask_ax_unfeasible[0,v,:]]
             x_mirr = np.concatenate(((-1*x[::-1]), x))
             y_mirr = np.concatenate((y[::-1], y))
             #connect last to first point
@@ -264,9 +264,9 @@ def plot():
         for i, data in enumerate(data_dict):
             g = np.where(gt_select1.val == data["g_list"])[0][0]
             for v in data["v_picks"]:
-                x = data["gg_array"][g,v,mask_ax_unfeasible[g,v,:],0]
+                x = data["gg_array"][g, v, :, 0][mask_ax_unfeasible[g,v,:]]
                 x_mirr = np.concatenate(((-1*x[::-1]), x))
-                y = data["gg_array"][g,mask_ax_unfeasible[g,v,:],1]
+                y = data["gg_array"][g, v, :, 1][mask_ax_unfeasible[g,v,:]]
                 y_mirr = np.concatenate((y[::-1], y))
                 #connect last to first point
                 x_mirr = np.append(x_mirr, x_mirr[0])

@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
@@ -186,8 +187,9 @@ class data_handler:
         l1 = [None] * self.v_steps
         for v in range(self.v_steps):
             if self.mirror_gg:
-                x = self.gg_array[(self.gt_steps - 1), v, self.mask_ax_unfeasible[(self.gt_steps - 1), v, :], 0]
-                y = self.gg_array[(self.gt_steps - 1), v, self.mask_ax_unfeasible[(self.gt_steps - 1), v, :], 1]
+                mask_v = self.mask_ax_unfeasible[(self.gt_steps - 1), v, :]
+                x = self.gg_array[(self.gt_steps - 1), v, :, 0][mask_v]
+                y = self.gg_array[(self.gt_steps - 1), v, :, 1][mask_v]
                 x_mirr = np.concatenate(((-1 * x[::-1]), x))
                 y_mirr = np.concatenate((y[::-1], y))
                 # connect last to first point
@@ -208,16 +210,17 @@ class data_handler:
         axgt1 = plt.axes([0.25, 0.15, 0.65, 0.03])
         
         # Create a slider from 0.0 to 20.0 in axes axfreq with 3 as initial value
-        gt_select1 = Slider(axgt1, 'gt', np.min(self.gt_range), np.max(self.gt_range), np.min(self.gt_range), valstep=(self.gt_range[1] - self.gt_range[0]))
+        gt_select1 = Slider(axgt1, 'gt', np.min(self.gt_range), np.max(self.gt_range), valinit=np.min(self.gt_range), valstep=(self.gt_range[1] - self.gt_range[0]))
 
         # Create function to be called when slider value is changed        
         def update(val):
             gt = np.where(gt_select1.val == self.gt_range)[0][0]
             for v in range(self.v_steps):
                 if self.mirror_gg:
-                    x = self.gg_array[gt, v, self.mask_ax_unfeasible[gt, v, :], 0]
+                    mask_v = self.mask_ax_unfeasible[gt, v, :]
+                    x = self.gg_array[gt, v, :, 0][mask_v]
+                    y = self.gg_array[gt, v, :, 1][mask_v]
                     x_mirr = np.concatenate(((-1 * x[::-1]), x))
-                    y = self.gg_array[gt, v, self.mask_ax_unfeasible[gt, v, :], 1]
                     y_mirr = np.concatenate((y[::-1], y))
                     # connect last to first point
                     x_mirr = np.append(x_mirr, x_mirr[0])
@@ -225,15 +228,15 @@ class data_handler:
                     l1[v].set_xdata(x_mirr)
                     l1[v].set_ydata(y_mirr)
                 else:
-                    l1[v].set_xdata(self.gg_array_filt[gt, v, :, 0])
+                    l1[v].set_xdata(self.gg_array[gt, v, :, 0])
 
         # Call update function when slider value is changed
         gt_select1.on_changed(update)
         gt_select1.set_val(np.min(self.gt_range))
 
         # save gg array
-        name = '/plots/gggv'
-        saveas = folder + name
+        os.makedirs(os.path.join(folder, 'plots'), exist_ok=True)
+        saveas = os.path.join(folder, 'plots', 'gggv.png')
         plt.savefig(saveas)
         
         plt.show()
